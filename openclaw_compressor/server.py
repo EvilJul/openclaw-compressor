@@ -12,8 +12,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from mcp.server import Server
-from mcp.server.stdio import run_stdio
 from mcp.types import Tool, TextContent
+
+try:
+    from mcp.server.stdio import stdio_server as _stdio_server
+
+    _USE_NEW_API = True
+except ImportError:
+    from mcp.server.stdio import run_stdio as _run_stdio
+
+    _USE_NEW_API = False
 
 from .hosts import resolve_session_path, setup_interactive
 from .session import Session
@@ -251,8 +259,15 @@ def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "setup":
         setup_interactive()
+    elif _USE_NEW_API:
+
+        async def _run_new():
+            async with _stdio_server() as (read_stream, write_stream):
+                await server.run(read_stream, write_stream, server.create_initialization_options())
+
+        asyncio.run(_run_new())
     else:
-        asyncio.run(run_stdio(server))
+        asyncio.run(_run_stdio(server))
 
 
 if __name__ == "__main__":
