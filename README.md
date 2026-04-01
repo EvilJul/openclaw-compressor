@@ -144,33 +144,47 @@ setup 会：
 | OPENCLAW_COMPRESSOR_MODEL | 可选，LLM 策略的默认模型（优先级高于工具参数） |
 | OPENCLAW_COMPRESSOR_PROVIDER | 可选，强制指定 provider（anthropic / openai），通常无需设置 |
 
-### 4. 在项目中添加使用指引
+### 4. 让 AI 自动调用压缩（推荐）
 
-在项目根目录的指引文件（如 `CLAUDE.md`、`.openclaw/instructions.md` 等）中添加以下内容，让模型知道何时、如何调用压缩工具：
+MCP 协议本身没有自动触发机制，需要通过项目级指令让 AI 主动调用。根据你使用的宿主，将以下内容添加到对应的指令文件中：
+
+| 宿主 | 指令文件 |
+|------|----------|
+| OpenClaw | 项目根目录 `AGENTS.md`（或 `~/clawd/AGENTS.md`） |
+| Claude Code | 项目根目录 `CLAUDE.md` |
+| Cline | 项目根目录 `.clinerules` |
+
+将以下内容复制到对应文件中：
 
 ```markdown
-## Context Compression
+## Auto Context Compression（自动上下文压缩）
 
-本项目配置了 openclaw-compressor MCP Server，提供智能上下文压缩能力。
+本项目配置了 openclaw-compressor MCP Server。你必须遵守以下自动压缩规则：
 
-当对话变长、上下文接近限制时，按以下步骤操作：
+### 自动触发条件（满足任一即执行）
 
-1. 调用 mcp__context-compressor__analyze_context 检查当前 session 的 token 用量
-   - 参数 session_path：当前 session 文件路径
-2. 如果返回建议压缩，先调用 mcp__context-compressor__preview_compression 预览摘要
-   - 参数 strategy：推荐 smart_local
-3. 确认摘要合理后，调用 mcp__context-compressor__compress_session 执行压缩
-   - 参数 strategy：smart_local（默认）或 llm（复杂场景）
-   - 使用 llm 策略时，传入 model 参数指定模型（如 claude-sonnet-4-20250514、gpt-4o）
+- 对话消息数超过 20 条
+- 你感知到上下文变长、响应变慢、或接近上下文窗口限制
+- 用户开始全新的任务方向，旧上下文已不再相关
 
-注意事项：
-- 压缩后旧消息被替换为结构化摘要，最近 4 条消息原样保留
-- smart_local 策略零成本零延迟，适合绝大多数场景
-- llm 策略调用 LLM 生成语义级摘要，支持 Anthropic 和 OpenAI 模型，适合复杂多步推理场景
-- 压缩前务必先 preview_compression 确认摘要质量
+### 压缩流程
+
+1. 调用 mcp__context-compressor__analyze_context 检查 token 用量
+   - 参数 session_path：当前 session 文件路径或 ID
+2. 如果返回 RECOMMENDATION: Compress now，直接调用 mcp__context-compressor__compress_session 执行压缩
+   - 参数 strategy：smart_local（默认，零成本零延迟）
+   - 复杂多步推理场景可用 llm 策略，需传入 model 参数
+3. 压缩完成后简要告知用户压缩结果和压缩比
+4. 如果 analyze_context 返回 OK（有余量），跳过压缩，不要打扰用户
+
+### 规则
+
+- 不要在压缩前询问用户是否需要压缩，直接执行
+- 压缩保留最近 4 条消息，不会丢失当前工作上下文
+- 优先使用 smart_local 策略
 ```
 
-完成配置后，重启会话即可生效。
+完成配置后，重启会话即可生效。AI 会在对话变长时自动检测并压缩，无需手动触发。
 
 ---
 
