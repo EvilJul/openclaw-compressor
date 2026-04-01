@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "openclaw-compressor"
 version = "0.1.0"
-description = "Pluggable context compression MCP server for OpenClaw / Claude Code"
+description = "Pluggable context compression MCP server for OpenClaw / Claude Code / Cline and other MCP hosts"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "EvilJul" },
 ]
-keywords = ["claude", "openclaw", "mcp", "context", "compression", "llm"]
+keywords = ["claude", "openclaw", "cline", "mcp", "context", "compression", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

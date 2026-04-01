@@ -15,21 +15,11 @@ from mcp.server import Server
 from mcp.server.stdio import run_stdio
 from mcp.types import Tool, TextContent
 
+from .hosts import resolve_session_path, setup_interactive
 from .session import Session
 from .strategies import CompactionConfig, get_strategy
 
 server = Server("openclaw-compressor")
-
-
-def _resolve_session_path(session_path: str) -> Path:
-    """Resolve session path, checking ~/.claude/sessions/ as fallback."""
-    p = Path(session_path)
-    if p.exists():
-        return p
-    fallback = Path.home() / ".claude" / "sessions" / f"{session_path}.json"
-    if fallback.exists():
-        return fallback
-    raise FileNotFoundError(f"Session not found: {session_path}")
 
 
 def _parse_config(args: dict) -> CompactionConfig:
@@ -164,7 +154,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 def _handle_analyze(args: dict) -> list[TextContent]:
-    path = _resolve_session_path(args["session_path"])
+    path = resolve_session_path(args["session_path"])
     session = Session.load(path)
     threshold = args.get("max_estimated_tokens", 10_000)
 
@@ -191,7 +181,7 @@ def _handle_analyze(args: dict) -> list[TextContent]:
 
 
 def _handle_compress(args: dict) -> list[TextContent]:
-    path = _resolve_session_path(args["session_path"])
+    path = resolve_session_path(args["session_path"])
     session = Session.load(path)
     config = _parse_config(args)
     strategy_kwargs: dict = {}
@@ -225,7 +215,7 @@ def _handle_compress(args: dict) -> list[TextContent]:
 
 
 def _handle_preview(args: dict) -> list[TextContent]:
-    path = _resolve_session_path(args["session_path"])
+    path = resolve_session_path(args["session_path"])
     session = Session.load(path)
     config = _parse_config(args)
     strategy_kwargs: dict = {}
@@ -255,9 +245,14 @@ def _handle_preview(args: dict) -> list[TextContent]:
 
 
 def main():
-    """Entry point for the MCP server."""
+    """Entry point for the MCP server. Supports 'setup' subcommand."""
     import asyncio
-    asyncio.run(run_stdio(server))
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        setup_interactive()
+    else:
+        asyncio.run(run_stdio(server))
 
 
 if __name__ == "__main__":

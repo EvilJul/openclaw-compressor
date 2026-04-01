@@ -1,8 +1,16 @@
 # openclaw-compressor
 
-可插拔的上下文压缩 MCP Server，适用于 OpenClaw / Claude Code 等基于 MCP 协议的 AI 编程助手。
+可插拔的上下文压缩 MCP Server，适用于任何基于 MCP 协议的 AI 编程助手。
+
+支持的宿主环境：
+- **OpenClaw** (`~/.openclaw/`)
+- **Claude Code** (`~/.claude/`)
+- **Cline** (`~/.cline/`)
+- 任意 MCP 宿主（通过环境变量 `OPENCLAW_COMPRESSOR_SESSION_DIR` 指定 session 目录）
 
 通过 MCP 协议接入，零侵入，不修改任何宿主程序代码。
+
+---
 
 ## 快速开始
 
@@ -28,15 +36,69 @@ openclaw-compressor --help
 
 如果提示 `command not found`，用 `python3 -m openclaw_compressor.server` 替代。
 
-### 2. 注册 MCP Server
+### 2. 自动配置（推荐）
 
-编辑 `~/.claude/settings.json`（全局）或 `.claude/settings.json`（项目级）：
+运行 setup 命令，自动检测已安装的宿主环境并注册 MCP Server：
+
+```bash
+openclaw-compressor setup
+```
+
+setup 会：
+1. 扫描系统中已安装的 MCP 宿主（OpenClaw、Claude Code、Cline）
+2. 显示检测结果和生成的配置
+3. 询问是否自动写入对应宿主的配置文件
+
+### 3. 手动配置
+
+如果 setup 不适用，手动编辑宿主的配置文件。
+
+**OpenClaw** — 编辑 `~/.openclaw/settings.json`：
 
 ```json
 {
   "mcpServers": {
     "context-compressor": {
       "command": "openclaw-compressor"
+    }
+  }
+}
+```
+
+**Claude Code** — 编辑 `~/.claude/settings.json`：
+
+```json
+{
+  "mcpServers": {
+    "context-compressor": {
+      "command": "openclaw-compressor"
+    }
+  }
+}
+```
+
+**Cline** — 编辑 `~/.cline/settings.json`：
+
+```json
+{
+  "mcpServers": {
+    "context-compressor": {
+      "command": "openclaw-compressor"
+    }
+  }
+}
+```
+
+**其他 MCP 宿主** — 在宿主的 MCP 配置中添加同样的 server 定义，并设置环境变量指定 session 目录：
+
+```json
+{
+  "mcpServers": {
+    "context-compressor": {
+      "command": "openclaw-compressor",
+      "env": {
+        "OPENCLAW_COMPRESSOR_SESSION_DIR": "/path/to/your/sessions"
+      }
     }
   }
 }
@@ -72,18 +134,19 @@ openclaw-compressor --help
 }
 ```
 
-环境变量说明：
+### 环境变量
 
 | 变量 | 说明 |
 |------|------|
+| OPENCLAW_COMPRESSOR_SESSION_DIR | 自定义 session 目录路径（优先级最高，适用于非标准宿主） |
 | ANTHROPIC_API_KEY | 使用 Claude 系列模型时必填 |
 | OPENAI_API_KEY | 使用 GPT / o 系列模型时必填 |
 | OPENCLAW_COMPRESSOR_MODEL | 可选，LLM 策略的默认模型（优先级高于工具参数） |
-| OPENCLAW_COMPRESSOR_PROVIDER | 可选，强制指定 provider（anthropic / openai），通常无需设置，会根据模型名自动推断 |
+| OPENCLAW_COMPRESSOR_PROVIDER | 可选，强制指定 provider（anthropic / openai），通常无需设置 |
 
-### 3. 在 CLAUDE.md 中添加使用指引
+### 4. 在项目中添加使用指引
 
-在项目根目录的 `CLAUDE.md` 中添加以下内容，让模型知道何时、如何调用压缩工具：
+在项目根目录的指引文件（如 `CLAUDE.md`、`.openclaw/instructions.md` 等）中添加以下内容，让模型知道何时、如何调用压缩工具：
 
 ```markdown
 ## Context Compression
@@ -107,7 +170,24 @@ openclaw-compressor --help
 - 压缩前务必先 preview_compression 确认摘要质量
 ```
 
-完成以上 3 步后，重启会话即可生效。
+完成配置后，重启会话即可生效。
+
+---
+
+## Session 路径解析
+
+工具接受 `session_path` 参数，支持以下格式：
+
+1. **绝对路径** — 直接指向 session 文件，如 `/home/user/.openclaw/sessions/abc123.json`
+2. **Session ID** — 自动在已知目录中搜索，如 `abc123`
+
+搜索顺序：
+1. `OPENCLAW_COMPRESSOR_SESSION_DIR` 环境变量指定的目录（最高优先级）
+2. `~/.openclaw/sessions/`（OpenClaw）
+3. `~/.claude/sessions/`（Claude Code）
+4. `~/.cline/sessions/`（Cline）
+
+只搜索实际存在的目录。如果所有已知目录都不存在，工具会返回明确的错误提示，引导用户设置 `OPENCLAW_COMPRESSOR_SESSION_DIR` 或传入绝对路径。
 
 ---
 
@@ -122,7 +202,7 @@ openclaw-compressor --help
 
 插件作为独立进程运行，通过 MCP stdio 协议与宿主通信。当模型调用压缩工具时，插件直接读取 session JSON 文件，执行压缩算法，将结果写回磁盘。整个过程不经过宿主 runtime，不修改任何原生代码。
 
-Session 文件默认位置：`~/.claude/sessions/<session-id>.json`
+Session 文件位置取决于宿主环境，通过多目录探测自动发现。
 
 ---
 
@@ -144,7 +224,8 @@ Session: abc123.json
 Messages: 47
 Estimated tokens: 15,230
 Roles: user=12, assistant=18, tool=17
-Tools: Bash, Read, EditRECOMMENDATION: Compress now (tokens 15,230 >= threshold 10,000)
+Tools: Bash, Read, Edit
+RECOMMENDATION: Compress now (tokens 15,230 >= threshold 10,000)
 ```
 
 ### compress_session
@@ -272,21 +353,29 @@ Tokens: 15,230 -> 2,100 (86% reduction)
 ```
 openclaw-compressor/
 ├── pyproject.toml                  # 包定义、依赖、CLI 入口点
-├── LICENSE                         # MIT
+├── LICENSE                # MIT
 ├── README.md
 ├── .gitignore
 ├── openclaw_compressor/            # 主包
 │   ├── __init__.py                 # 版本号
+│   ├── hosts.py                    # 多宿主探测、session 路径解析、自动配置
 │   ├── session.py                  # Session/Message/ContentBlock 数据结构
 │   ├── strategies.py               # 压缩策略（Local / SmartLocal / LLM）
 │   └── server.py                   # MCP Server 入口
 └── tests/
     ├── __init__.py
+    ├── test_hosts.py               # 多宿主探测、路径解析测试
     ├── test_session.py             # session 读写、序列化测试
     └── test_strategies.py          # 压缩策略、阈值判断、摘要内容测试
 ```
 
 ### 模块职责
+
+**hosts.py** — 宿主适配层
+- 多宿主 session 目录探测（OpenClaw / Claude Code / Cline / 自定义）
+- session 路径解析：支持绝对路径和 session ID，自动搜索已知目录
+- 自动配置：检测宿主环境，生成并写入 MCP 配置
+- setup 交互式命令
 
 **session.py** — 数据层
 - ContentBlock / Message / Session 三层数据结构
@@ -301,7 +390,8 @@ openclaw-compressor/
 **server.py** — 接口层
 - 基于 mcp 库的 stdio server
 - 三个工具注册：analyze_context / compress_session / preview_compression
-- session 路径解析：支持绝对路径和 session ID
+- session 路径解析委托给 hosts.py
+- 支持 `setup` 子命令
 
 ---
 
@@ -318,7 +408,7 @@ pip install -e ".[dev,llm]"
 pytest
 
 # 语法检查
-python3 -c "import ast; [ast.parse(open(f).read()) for f in ['openclaw_compressor/session.py','openclaw_compressor/strategies.py','openclaw_compressor/server.py']]"
+python3 -c "import ast; [ast.parse(open(f).read()) for f in ['openclaw_compressor/hosts.py','openclaw_compressor/session.py','openclaw_compressor/strategies.py','openclaw_compressor/server.py']]"
 ```
 
 ### 自定义策略
@@ -350,8 +440,16 @@ pip show openclaw-compressor       # 检查安装位置
 **Session 文件找不到**
 
 ```bash
-ls ~/.claude/sessions/             # 列出所有 session
-# 在 OpenClaw 中输入 /status 查看当前 session 路径
+# 检查各宿主的 session 目录是否存在
+ls ~/.openclaw/sessions/           # OpenClaw
+ls ~/.claude/sessions/             # Claude Code
+ls ~/.cline/sessions/              # Cline
+
+# 或设置自定义 session 目录
+export OPENCLAW_COMPRESSOR_SESSION_DIR=/path/to/sessions
+
+# 运行 setup 查看检测结果
+openclaw-compressor setup
 ```
 
 **LLM 策略报错**
@@ -374,7 +472,7 @@ echo $OPENCLAW_COMPRESSOR_MODEL              # 环境变量方式
 
 ```bash
 # 建议压缩前备份
-cp ~/.claude/sessions/<id>.json ~/.claude/sessions/<id>.json.bak
+cp ~/.openclaw/sessions/<id>.json ~/.openclaw/sessions/<id>.json.bak
 # 或先用 preview_compression 预览
 ```
 
