@@ -1,12 +1,18 @@
 """Tests for compression strategies."""
 
+import os
+import pytest
+
 from openclaw_compressor.session import ContentBlock, Message, Session
 from openclaw_compressor.strategies import (
     CompactionConfig,
     CompactionStrategy,
     LocalStrategy,
+    LlmStrategy,
     SmartLocalStrategy,
     get_strategy,
+    resolve_model,
+    _infer_provider,
     truncate,
     extract_file_paths,
 )
@@ -215,12 +221,64 @@ class TestGetStrategy:
     def test_smart_local(self):
         assert isinstance(get_strategy("smart_local"), SmartLocalStrategy)
 
+    def test_llm_with_model(self):
+        strategy = get_strategy("llm", model="claude-haiku-4-5-20251001")
+        assert isinstance(strategy, LlmStrategy)
+        assert strategy.model == "claude-haiku-4-5-20251001"
+
+    def test_llm_without_model_raises(self, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_COMPRESSOR_MODEL", raising=False)
+        with pytest.raises(ValueError, match="No model specified"):
+            get_strategy("llm")
+
+    def test_llm_env_var_overrides_param(self, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_COMPRESSOR_MODEL", "claude-sonnet-4-20250514")
+        strategy = get_strategy("llm", model="claude-haiku-4-5-20251001")
+        assert strategy.model == "claude-sonnet-4-20250514"
+
     def test_unknown_raises(self):
         try:
             get_strategy("nonexistent")
             assert False, "Should have raised ValueError"
         except ValueError as e:
             assert "nonexistent" in str(e)
+
+
+class TestResolveModel:
+    def test_param_only(self, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_COMPRESSOR_MODEL", raising=False)
+        assert resolve_model("gpt-4o") == "gpt-4o"
+
+    def test_env_only(self, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_COMPRESSOR_MODEL", "claude-sonnet-4-20250514")
+        assert resolve_model(None) == "claude-sonnet-4-20250514"
+
+    def test_env_takes_priority(self, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_COMPRESSOR_MODEL", "claude-opus-4-20250514")
+        assert resolve_model("gpt-4o") == "claude-opus-4-20250514"
+
+    def test_neither_raises(self, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_COMPRESSOR_MODEL", raising=False)
+        with pytest.raises(ValueError, match="No model specified"):
+            resolve_model(None)
+
+
+class TestInferProvider:
+    def test_claude_models(self):
+        assert _infer_provider("claude-haiku-4-5-20251001") == "anthropic"
+        assert _infer_provider("claude-sonnet-4-20250514") == "anthropic"
+        assert _infer_provider("claude-opus-4-20250514") == "anthropic"
+
+    def test_openai_models(self):
+        assert _infer_provider("gpt-4o") == "openai"
+        assert _infer_provider("gpt-4o-mini") == "openai"
+        assert _infer_provider("o3-mini") == "openai"
+        assert _infer_provider("o4-mini") == "openai"
+        assert _infer_provider("chatgpt-4o-latest") == "openai"
+
+    def test_unknown_model_raises(self):
+        with pytest.raises(ValueError, match="Cannot infer provider"):
+            _infer_provider("llama-3-70b")
 
 
 class TestCompressionRatio:

@@ -87,6 +87,13 @@ async def list_tools() -> list[Tool]:
                         "description": "Compression strategy (default: smart_local)",
                         "default": "smart_local",
                     },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "LLM model ID for 'llm' strategy (e.g. 'claude-sonnet-4-20250514', 'gpt-4o'). "
+                            "Can also be set via OPENCLAW_COMPRESSOR_MODEL env var (env var takes priority)."
+                        ),
+                    },
                     "preserve_recent_messages": {
                         "type": "integer",
                         "description": "Number of recent messages to keep verbatim (default: 4)",
@@ -106,7 +113,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Dry-run compression: returns the summary that would be generated "
                 "and compression stats, without modifying the session file."
-            ),
+         ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -119,6 +126,13 @@ async def list_tools() -> list[Tool]:
                         "enum": ["local", "smart_local", "llm"],
                         "description": "Compression strategy (default: smart_local)",
                         "default": "smart_local",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "LLM model ID for 'llm' strategy (e.g. 'claude-sonnet-4-20250514', 'gpt-4o'). "
+                            "Can also be set via OPENCLAW_COMPRESSOR_MODEL env var (env var takes priority)."
+                        ),
                     },
                     "preserve_recent_messages": {
                         "type": "integer",
@@ -180,7 +194,10 @@ def _handle_compress(args: dict) -> list[TextContent]:
     path = _resolve_session_path(args["session_path"])
     session = Session.load(path)
     config = _parse_config(args)
-    strategy = get_strategy(config.strategy)
+    strategy_kwargs: dict = {}
+    if model := args.get("model"):
+        strategy_kwargs["model"] = model
+    strategy = get_strategy(config.strategy, **strategy_kwargs)
 
     result = strategy.compact(session, config)
 
@@ -211,7 +228,10 @@ def _handle_preview(args: dict) -> list[TextContent]:
     path = _resolve_session_path(args["session_path"])
     session = Session.load(path)
     config = _parse_config(args)
-    strategy = get_strategy(config.strategy)
+    strategy_kwargs: dict = {}
+    if model := args.get("model"):
+        strategy_kwargs["model"] = model
+    strategy = get_strategy(config.strategy, **strategy_kwargs)
 
     result = strategy.compact(session, config)
 

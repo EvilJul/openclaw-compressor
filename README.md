@@ -14,8 +14,10 @@ git clone https://github.com/EvilJul/openclaw-compressor.git
 cd openclaw-compressor
 pip install -e .
 
-# 如需 LLM 压缩策略（需要 ANTHROPIC_API_KEY）
-pip install -e ".[llm]"
+# 按需安装 LLM provider
+pip install -e ".[anthropic]"   # Anthropic (Claude 系列)
+pip install -e ".[openai]"     # OpenAI (GPT / o 系列)
+pip install -e ".[llm]"        # 全部 provider
 ```
 
 安装后验证命令可用：
@@ -53,7 +55,7 @@ openclaw-compressor --help
 }
 ```
 
-使用 LLM 策略时需传入 API Key：
+使用 LLM 策略时需传入对应 provider 的 API Key，可选配置默认模型：
 
 ```json
 {
@@ -61,12 +63,23 @@ openclaw-compressor --help
     "context-compressor": {
       "command": "openclaw-compressor",
       "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "OPENAI_API_KEY": "sk-...",
+        "OPENCLAW_COMPRESSOR_MODEL": "claude-sonnet-4-20250514"
       }
     }
   }
 }
 ```
+
+环境变量说明：
+
+| 变量 | 说明 |
+|------|------|
+| ANTHROPIC_API_KEY | 使用 Claude 系列模型时必填 |
+| OPENAI_API_KEY | 使用 GPT / o 系列模型时必填 |
+| OPENCLAW_COMPRESSOR_MODEL | 可选，LLM 策略的默认模型（优先级高于工具参数） |
+| OPENCLAW_COMPRESSOR_PROVIDER | 可选，强制指定 provider（anthropic / openai），通常无需设置，会根据模型名自动推断 |
 
 ### 3. 在 CLAUDE.md 中添加使用指引
 
@@ -85,11 +98,12 @@ openclaw-compressor --help
    - 参数 strategy：推荐 smart_local
 3. 确认摘要合理后，调用 mcp__context-compressor__compress_session 执行压缩
    - 参数 strategy：smart_local（默认）或 llm（复杂场景）
+   - 使用 llm 策略时，传入 model 参数指定模型（如 claude-sonnet-4-20250514、gpt-4o）
 
 注意事项：
 - 压缩后旧消息被替换为结构化摘要，最近 4 条消息原样保留
 - smart_local 策略零成本零延迟，适合绝大多数场景
-- llm 策略调用 Claude Haiku 生成语义级摘要，适合复杂多步推理场景
+- llm 策略调用 LLM 生成语义级摘要，支持 Anthropic 和 OpenAI 模型，适合复杂多步推理场景
 - 压缩前务必先 preview_compression 确认摘要质量
 ```
 
@@ -141,8 +155,11 @@ Tools: Bash, Read, EditRECOMMENDATION: Compress now (tokens 15,230 >= threshold 
 |------|------|------|--------|------|
 | session_path | string | 是 | - | session 文件路径或 session ID |
 | strategy | string | 否 | smart_local | 压缩策略：local / smart_local / llm |
+| model | string | 否 | - | LLM 模型 ID（llm 策略时使用，如 claude-sonnet-4-20250514、gpt-4o） |
 | preserve_recent_messages | integer | 否 | 4 | 保留最近消息数 |
 | max_estimated_tokens | integer | 否 | 10000 | 触发压缩的 token 阈值 |
+
+> model 优先级：环境变量 `OPENCLAW_COMPRESSOR_MODEL` > 工具参数 `model`。使用 llm 策略时至少需要提供其中一个。
 
 返回示例：
 
@@ -163,6 +180,7 @@ Tokens: 15,230 -> 2,100 (86% reduction)
 |------|------|------|--------|------|
 | session_path | string | 是 | - | session 文件路径或 session ID |
 | strategy | string | 否 | smart_local | 压缩策略 |
+| model | string | 否 | - | LLM 模型 ID（llm 策略时使用） |
 | preserve_recent_messages | integer | 否 | 4 | 保留最近消息数 |
 
 ---
@@ -192,12 +210,12 @@ Tokens: 15,230 -> 2,100 (86% reduction)
 
 ### llm
 
-先用 smart_local 提取结构化信息，再发给 Claude Haiku 生成语义级摘要。
+先用 smart_local 提取结构化信息，再发给 LLM 生成语义级摘要。支持 Anthropic（Claude 系列）和 OpenAI（GPT / o 系列）模型，根据模型名自动推断 provider。
 
 - 理解对话意图，摘要质量最高
-- 每次压缩约 $0.001-0.005（Haiku 定价）
-- 需要 ANTHROPIC_API_KEY 环境变量
-- 需要 `pip install openclaw-compressor[llm]`
+- 需要对应 provider 的 API Key 环境变量
+- 需要安装对应 provider 依赖：`pip install openclaw-compressor[anthropic]` 或 `pip install openclaw-compressor[openai]`
+- 模型通过工具参数 `model` 或环境变量 `OPENCLAW_COMPRESSOR_MODEL` 指定
 - 原始对话超过 20,000 字符时自动截断
 
 ---
@@ -339,8 +357,17 @@ ls ~/.claude/sessions/             # 列出所有 session
 **LLM 策略报错**
 
 ```bash
-pip install openclaw-compressor[llm]   # 确认安装了 anthropic
-echo $ANTHROPIC_API_KEY                # 确认 Key 已设置
+# 确认安装了对应 provider 依赖
+pip install openclaw-compressor[anthropic]   # Claude 系列
+pip install openclaw-compressor[openai]      # GPT / o 系列
+
+# 确认 API Key 已设置
+echo $ANTHROPIC_API_KEY
+echo $OPENAI_API_KEY
+
+# 确认指定了模型（二选一）
+echo $OPENCLAW_COMPRESSOR_MODEL              # 环境变量方式
+# 或在工具调用时传入 model 参数
 ```
 
 **压缩后行为异常**

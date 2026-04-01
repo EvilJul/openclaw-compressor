@@ -12,6 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+import os
 
 from .session import ContentBlock, Message, Session
 
@@ -301,27 +302,100 @@ class SmartLocalStrategy(CompactionStrategy):
         return "\n".join(lines)
 
 
+class LlmClient(ABC):
+    """Abstract LLM client — one implementation per provider."""
+
+    @abstractmethod
+    def chat(self, model: str, max_tokens: int, prompt: str) -> str:
+        """Send a single-turn prompt and return the text response."""
+
+
+class AnthropicClient(LlmClient):
+    def __init__(self) -> None:
+        try:
+            import anthropic
+            self._client = anthropic.Anthropic()
+        except ImportError:
+            raise RuntimeError(
+                "Anthropic provider requires the anthropic package. "
+                "Install with: pip install openclaw-compressor[anthropic]"
+            )
+
+    def chat(self, model: str, max_tokens: int, prompt: str) -> str:
+        response = self._client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+
+
+class OpenAIClient(LlmClient):
+    def __init__(self) -> None:
+        try:
+            import openai
+            self._client = openai.OpenAI()
+        except ImportError:
+            raise RuntimeError(
+                "OpenAI provider requires the openai package. "
+                "Install with: pip install openclaw-compressor[openai]"
+            )
+
+    def chat(self, model: str, max_tokens: int, prompt: str) -> str:
+        response = self._client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+
+# Prefix-based provider detection
+_MODEL_PREFIXES: list[tuple[tuple[str, ...], str]] = [
+    (("claude",), "anthropic"),
+    (("gpt-", "o1-", "o3-", "o4-", "chatgpt-"), "openai"),
+]
+
+
+def _infer_provider(model: str) -> str:
+    """Infer provider name from model ID prefix."""
+    model_lower = model.lower()
+    for prefixes, provider in _MODEL_PREFIXES:
+        if any(model_lower.startswith(p) for p in prefixes):
+            return provider
+    raise ValueError(
+        f"Cannot infer provider for model '{model}'. "
+        f"Set OPENCLAW_COMPRESSOR_PROVIDER to 'anthropic' or 'openai'."
+    )
+
+
+def get_llm_client(model: str) -> LlmClient:
+    """Build an LlmClient for the given model, respecting env overrides."""
+    provider = os.environ.get("OPENCLAW_COMPRESSOR_PROVIDER") or _infer_provider(model)
+    provider = provider.strip().lower()
+    if provider == "anthropic":
+        return AnthropicClient()
+    elif provider == "openai":
+        return OpenAIClient()
+    else:
+        raise ValueError(f"Unsupported provider: '{provider}'. Use 'anthropic' or 'openai'.")
+
+
 class LlmStrategy(CompactionStrategy):
     """
-    Uses Claude API to generate a high-quality semantic summary.
-    Requires `anthropic` package: pip install openclaw-compressor[llm]
+    Uses an LLM to generate a high-quality semantic summary.
+    Supports any Anthropic or OpenAI(-compatible) model.
+    Model must be provided — either via tool parameter or OPENCLAW_COMPRESSOR_MODEL env var.
     """
 
-    def __init__(self, model: str = "claude-haiku-4-5-20251001", max_summary_tokens: int = 1024):
+    def __init__(self, model: str, max_summary_tokens: int = 1024):
         self.model = model
         self.max_summary_tokens = max_summary_tokens
-        self._client: Any = None
+        self._client: LlmClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> LlmClient:
         if self._client is None:
-            try:
-                import anthropic
-                self._client = anthropic.Anthropic()
-            except ImportError:
-                raise RuntimeError(
-                    "LlmStrategy requires the anthropic package. "
-                    "Install with: pip install openclaw-compressor[llm]"
-                )
+            self._client = get_llm_client(self.model)
         return self._client
 
     def summarize(self, messages: list[Message]) -> str:
@@ -347,14 +421,21 @@ class LlmStrategy(CompactionStrategy):
         )
 
         client = self._get_client()
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=self.max_summary_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        llm_summary = response.content[0].text
+        llm_summary = client.chat(self.model, self.max_summary_tokens, prompt)
 
         return f"Conversation summary (AI-generated):\n{llm_summary}"
+
+
+def resolve_model(model: str | None = None) -> str:
+    """Resolve model using priority: env var > tool parameter. Raises if neither set."""
+    env_model = os.environ.get("OPENCLAW_COMPRESSOR_MODEL")
+    resolved = env_model or model
+    if not resolved:
+        raise ValueError(
+            "No model specified. Either set OPENCLAW_COMPRESSOR_MODEL env var "
+            "or pass 'model' in the tool call."
+        )
+    return resolved
 
 
 def get_strategy(name: str, **kwargs: Any) -> CompactionStrategy:
@@ -367,4 +448,6 @@ def get_strategy(name: str, **kwargs: Any) -> CompactionStrategy:
     cls = strategies.get(name)
     if cls is None:
         raise ValueError(f"Unknown strategy: {name}. Available: {', '.join(strategies)}")
+    if cls is LlmStrategy:
+        kwargs["model"] = resolve_model(kwargs.get("model"))
     return cls(**kwargs)
