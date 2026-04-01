@@ -235,8 +235,22 @@ class Session:
                 if not msg_data:
                     continue
                 role = msg_data.get("role", "user")
+
+                # New NDJSON format (OpenClaw 2026.3+):
+                # message: {role, content: [...blocks], usage}
+                # Old JSON format inside NDJSON: {role, blocks: [...]}
                 content_field = msg_data.get("content", "")
-                blocks = _content_to_blocks(content_field)
+
+                # If content is a list of blocks (new format), convert directly.
+                # If content is a string or missing, try blocks directly (legacy).
+                if isinstance(content_field, list):
+                    blocks = [ContentBlock.from_dict(b) for b in content_field]
+                elif isinstance(content_field, str):
+                    blocks = [ContentBlock(type="text", data={"text": content_field})]
+                else:
+                    # Fallback: try blocks directly from msg_data
+                    blocks = [ContentBlock.from_dict(b) for b in msg_data.get("blocks", [])]
+
                 usage = msg_data.get("usage")
                 messages.append(Message(role=role, blocks=blocks, usage=usage))
 
