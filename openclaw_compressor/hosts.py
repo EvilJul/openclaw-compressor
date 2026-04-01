@@ -118,6 +118,7 @@ def resolve_session_path(session_path: str) -> Path:
     search_dirs = get_session_search_dirs()
     candidates = [
         f"{session_path}.json",
+        f"{session_path}.jsonl",
         session_path,
     ]
 
