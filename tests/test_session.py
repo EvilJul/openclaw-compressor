@@ -135,6 +135,165 @@ class TestSession:
         finally:
             path.unlink()
 
+    # ---- JSONL format tests ----
+
+    def test_load_jsonl_basic(self):
+        """Load a basic OpenClaw JSONL session."""
+        content = "\n".join([
+            '{"type":"session","id":"s1","cwd":"/tmp","timestamp":"2026-03-13T00:00:00Z"}',
+            '{"type":"message","message":{"role":"user","content":"hello"}}',
+            '{"type":"message","message":{"role":"assistant","content":"hi there"}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+            f.write(content)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            assert session._source_format == "jsonl"
+            assert session._jsonl_header is not None
+            assert session._jsonl_header["id"] == "s1"
+            assert len(session.messages) == 2
+            assert session.messages[0].role == "user"
+            assert session.messages[0].first_text == "hello"
+            assert session.messages[1].role == "assistant"
+            assert session.messages[1].first_text == "hi there"
+        finally:
+            path.unlink()
+
+    def test_load_jsonl_with_content_blocks(self):
+        """Load JSONL with list-style content blocks."""
+        content = "\n".join([
+            '{"type":"session","id":"s2"}',
+            '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"thinking"},{"type":"tool_use","id":"t1","name":"Bash","input":"ls"}]}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+            f.write(content)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            assert len(session.messages) == 1
+            msg = session.messages[0]
+            assert len(msg.blocks) == 2
+            assert msg.blocks[0].type == "text"
+            assert msg.blocks[0].text == "thinking"
+            assert msg.blocks[1].type == "tool_use"
+            assert msg.blocks[1].data["name"] == "Bash"
+        finally:
+            path.unlink()
+
+    def test_load_jsonl_with_compaction(self):
+        """Compaction entries should be loaded as system messages with _source_type preserved."""
+        content = "\n".join([
+            '{"type":"session","id":"s3"}',
+            '{"type":"message","message":{"role":"user","content":"do something"}}',
+            '{"type":"compaction","summary":"User asked to do something. Assistant did it."}',
+            '{"type":"message","message":{"role":"user","content":"next question"}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+            f.write(content)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            assert len(session.messages) == 3
+            assert session.messages[0].role == "user"
+            assert session.messages[1].role == "system"
+            assert session.messages[1]._source_type == "compaction"
+            assert "User asked" in session.messages[1].first_text
+            assert session.messages[2].role == "user"
+        finally:
+            path.unlink()
+
+    def test_jsonl_roundtrip_preserves_compaction(self):
+        """Compaction entries must survive a load -> save -> load cycle."""
+        original = "\n".join([
+            '{"type":"session","id":"s4","cwd":"/home"}',
+            '{"type":"message","message":{"role":"user","content":"hello"}}',
+            '{"type":"compaction","summary":"Summary of conversation so far."}',
+            '{"type":"message","message":{"role":"user","content":"continue"}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+            f.write(original)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            session.save(path)
+
+            # Re-read raw lines to verify compaction type is preserved
+            raw_lines = [
+                json.loads(line)
+                for line in path.read_text().strip().splitlines()
+                if line.strip()
+            ]
+            types = [entry.get("type") for entry in raw_lines]
+            assert types == ["session", "message", "compaction", "message"]
+            # Verify compaction content
+            compaction_entry = raw_lines[2]
+            assert compaction_entry["summary"] == "Summary of conversation so far."
+
+            # Also verify re-load produces the same structure
+            reloaded = Session.load(path)
+            assert len(reloaded.messages) == len(session.messages)
+            assert reloaded.messages[1]._source_type == "compaction"
+            assert reloaded.messages[1].first_text == session.messages[1].first_text
+        finally:
+            path.unlink()
+
+    def test_jsonl_roundtrip_preserves_header(self):
+        """Session header should survive round-trip."""
+        content = "\n".join([
+            '{"type":"session","id":"abc","cwd":"/proj","timestamp":"2026-03-13"}',
+            '{"type":"message","message":{"role":"user","content":"hi"}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+            f.write(content)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            session.save(path)
+            reloaded = Session.load(path)
+            assert reloaded._jsonl_header["id"] == "abc"
+            assert reloaded._jsonl_header["cwd"] == "/proj"
+        finally:
+            path.unlink()
+
+    def test_jsonl_autodetect_without_extension(self):
+        """A file without .jsonl extension but with JSONL content should be parsed as JSONL."""
+        content = "\n".join([
+            '{"type":"session","id":"s5"}',
+            '{"type":"message","message":{"role":"user","content":"test"}}',
+        ])
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
+            f.write(content)
+            path = Path(f.name)
+        try:
+            session = Session.load(path)
+            assert session._source_format == "jsonl"
+            assert len(session.messages) == 1
+        finally:
+            path.unlink()
+
+    def test_load_json_missing_messages_key_raises(self):
+        """A JSON file with valid JSON but no 'messages' key should raise ValueError."""
+        data = {"version": 1, "something_else": []}
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            json.dump(data, f)
+            path = Path(f.name)
+        try:
+            import pytest
+            with pytest.raises(ValueError, match="missing 'messages' key"):
+                Session.load(path)
+        finally:
+            path.unlink()
+
+    def test_session_equality_ignores_format_metadata(self):
+        """Two sessions with same messages but different source formats should be equal."""
+        msgs = [Message(role="user", blocks=[ContentBlock(type="text", data={"text": "hi"})])]
+        s1 = Session(version=1, messages=msgs)
+        s2 = Session(version=1, messages=msgs)
+        s2._source_format = "jsonl"
+        s2._jsonl_header = {"type": "session", "id": "x"}
+        assert s1 == s2
+
     def test_json_format_matches_rust(self):
         """Verify the JSON structure matches what Rust session.rs produces."""
         session = Session(version=1, messages=[

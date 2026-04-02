@@ -104,6 +104,7 @@ class Message:
     role: str
     blocks: list[ContentBlock]
     usage: dict[str, Any] | None = None
+    _source_type: str = field(default="message", repr=False, compare=False)
 
     @property
     def estimated_tokens(self) -> int:
@@ -152,8 +153,8 @@ class Message:
 class Session:
     version: int = 1
     messages: list[Message] = field(default_factory=list)
-    _source_format: str = field(default="json", repr=False)
-    _jsonl_header: dict[str, Any] | None = field(default=None, repr=False)
+    _source_format: str = field(default="json", repr=False, compare=False)
+    _jsonl_header: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     @property
     def estimated_tokens(self) -> int:
@@ -203,6 +204,11 @@ class Session:
             data = json.loads(content)
             if isinstance(data, dict) and "messages" in data:
                 return cls.from_dict(data)
+            if isinstance(data, dict):
+                raise ValueError(
+                    f"JSON session file missing 'messages' key: {path}\n"
+                    f"Found keys: {list(data.keys())}"
+                )
         except json.JSONDecodeError:
             pass
 
@@ -255,11 +261,14 @@ class Session:
                 messages.append(Message(role=role, blocks=blocks, usage=usage))
 
             elif entry_type == "compaction":
-                # Treat existing compaction summaries as system messages
+                # Treat existing compaction summaries as system messages,
+                # but remember the source type so we can round-trip faithfully.
                 summary = entry.get("summary", "")
                 if summary:
                     blocks = [ContentBlock(type="text", data={"text": summary})]
-                    messages.append(Message(role="system", blocks=blocks))
+                    msg = Message(role="system", blocks=blocks)
+                    msg._source_type = "compaction"
+                    messages.append(msg)
 
         session = cls(version=1, messages=messages)
         session._source_format = "jsonl"
@@ -286,6 +295,13 @@ class Session:
             lines.append(json.dumps(self._jsonl_header, ensure_ascii=False))
 
         for msg in self.messages:
+            if msg._source_type == "compaction":
+                # Round-trip compaction entries back in their original format
+                summary = msg.blocks[0].data.get("text", "") if msg.blocks else ""
+                entry = {"type": "compaction", "summary": summary}
+                lines.append(json.dumps(entry, ensure_ascii=False))
+                continue
+
             content = _blocks_to_content(msg.blocks)
             msg_data: dict[str, Any] = {"role": msg.role, "content": content}
             if msg.usage is not None:

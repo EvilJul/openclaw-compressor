@@ -315,9 +315,13 @@ Tokens: 15,230 -> 2,100 (86% reduction)
 
 ---
 
-## Session JSON 格式
+## Session 文件格式
 
-插件直接读写的 session 文件格式，与 OpenClaw Rust 端 session.rs 完全对齐：
+插件支持两种 session 文件格式，自动检测：
+
+### JSON 格式（Claude Code / Cline）
+
+文件扩展名 `.json`，整个文件是一个 JSON 对象：
 
 ```json
 {
@@ -358,6 +362,20 @@ Tokens: 15,230 -> 2,100 (86% reduction)
 }
 ```
 
+### JSONL 格式（OpenClaw 2026.3.13+）
+
+文件扩展名 `.jsonl`，每行一个独立 JSON 对象：
+
+```jsonl
+{"type":"session","id":"abc123","cwd":"/project","timestamp":"2026-03-13T10:00:00Z"}
+{"type":"message","message":{"role":"user","content":"帮我修复 login 页面的 bug"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Let me read the file."},{"type":"tool_use","id":"tool-1","name":"Read","input":"{}"}]}}
+{"type":"compaction","summary":"用户请求修复 login 页面 bug，助手读取了 src/login.ts 并完成修复。"}
+{"type":"message","message":{"role":"user","content":"继续下一个任务"}}
+```
+
+JSONL 格式中的 `compaction` 条目会在压缩 round-trip 中保真还原，不会丢失类型信息。
+
 压缩后第一条消息变为 system 角色的摘要，后面跟着原样保留的最近 N 条消息。
 
 ---
@@ -393,7 +411,8 @@ openclaw-compressor/
 
 **session.py** — 数据层
 - ContentBlock / Message / Session 三层数据结构
-- JSON 序列化/反序列化，与 Rust session.rs 格式对齐
+- 支持 JSON（Claude Code / Cline）和 JSONL（OpenClaw 2026.3.13+）两种格式，自动检测
+- JSONL compaction 条目 round-trip 保真
 - Token 估算：字符数 / 4 + 1（与 Rust 端一致）
 
 **strategies.py** — 算法层
